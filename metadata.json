@@ -1,0 +1,6 @@
+{
+  "name": "Calculadora de ROI - Espetinho no Trailer",
+  "description": "Calculadora de retorno estimado da gestão do perfil no Google do Espetinho no Trailer, por Localway Soluções Digitais.",
+  "permissions": [],
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
