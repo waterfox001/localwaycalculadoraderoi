@@ -1,6 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import logoImg from "@/assets/logo@localway_2KPNG.png";
+import { User, ShieldCheck } from "lucide-react";
+import { InfoTooltip } from "@/components/InfoTooltip";
+import { DynamicChart } from "@/components/DynamicChart";
+import { AdminAuthModal } from "@/components/AdminAuthModal";
+import { AdminPanel } from "@/components/AdminPanel";
+import {
+  DEFAULT_REPORT_CONFIG,
+  type ReportConfig,
+  type ExplanationItem,
+} from "@/data/default-report";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -11,7 +21,10 @@ export const Route = createFileRoute("/")({
         content:
           "Calculadora de retorno estimado da gestão do perfil no Google do Espetinho no Trailer, por Localway Soluções Digitais.",
       },
-      { property: "og:title", content: "Calculadora de ROI · Espetinho no Trailer | Localway" },
+      {
+        property: "og:title",
+        content: "Calculadora de ROI · Espetinho no Trailer | Localway",
+      },
       {
         property: "og:description",
         content:
@@ -21,20 +34,19 @@ export const Route = createFileRoute("/")({
       { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
-  component: Calculadora,
+  component: CalculadoraApp,
 });
 
-// Dados fixos do perfil
-const VIEWS = 430;
-const ROUTES = 194;
-const CALLS = 14;
-const INTERACTIONS = ROUTES + CALLS;
-const REVIEWS = 2;
-
 const brl = (v: number) =>
-  (Number.isFinite(v) ? v : 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  (Number.isFinite(v) ? v : 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
 const num = (v: number, d = 1) =>
-  v.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: d });
+  (Number.isFinite(v) ? v : 0).toLocaleString("pt-BR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: d,
+  });
 const pct = (v: number) => `${num(v * 100, 1)}%`;
 
 function MoneyInput({
@@ -43,18 +55,23 @@ function MoneyInput({
   hint,
   cents,
   onChange,
+  tooltip,
 }: {
   id: string;
   label: string;
   hint: string;
   cents: number;
   onChange: (c: number) => void;
+  tooltip?: ExplanationItem;
 }) {
   return (
     <div>
-      <label htmlFor={id} className="text-sm font-semibold text-foreground">
-        {label}
-      </label>
+      <div className="flex items-center gap-1.5">
+        <label htmlFor={id} className="text-sm font-semibold text-foreground">
+          {label}
+        </label>
+        {tooltip && <InfoTooltip explanation={tooltip} />}
+      </div>
       <input
         id={id}
         inputMode="numeric"
@@ -73,16 +90,21 @@ function MoneyInput({
 function Section({
   title,
   tag,
+  tooltip,
   children,
 }: {
   title: string;
   tag?: string;
+  tooltip?: ExplanationItem;
   children: React.ReactNode;
 }) {
   return (
     <section className="print-break rounded-2xl border border-border bg-card p-6 sm:p-8">
       <div className="mb-6 flex flex-wrap items-center gap-3">
-        <h2 className="text-xl font-semibold text-navy sm:text-2xl">{title}</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-xl font-semibold text-navy sm:text-2xl">{title}</h2>
+          {tooltip && <InfoTooltip explanation={tooltip} />}
+        </div>
         {tag && (
           <span className="rounded-full bg-sky-soft px-3 py-1 text-xs font-bold uppercase tracking-wide text-sky">
             {tag}
@@ -94,59 +116,180 @@ function Section({
   );
 }
 
-function Donut() {
-  const r = 70;
-  const C = 2 * Math.PI * r;
-  const share = ROUTES / INTERACTIONS;
-  return (
-    <svg
-      viewBox="0 0 180 180"
-      className="h-44 w-44 shrink-0 -rotate-90"
-      role="img"
-      aria-label="Composição das interações"
-    >
-      <circle cx="90" cy="90" r={r} fill="none" stroke="var(--sky)" strokeWidth="28" />
-      <circle
-        cx="90"
-        cy="90"
-        r={r}
-        fill="none"
-        stroke="var(--navy)"
-        strokeWidth="28"
-        strokeDasharray={`${share * C} ${C}`}
-      />
-      <g className="rotate-90" style={{ transformOrigin: "90px 90px" }}>
-        <text
-          x="90"
-          y="92"
-          textAnchor="middle"
-          className="fill-navy font-display text-[26px] font-bold"
-        >
-          {INTERACTIONS}
-        </text>
-        <text x="90" y="112" textAnchor="middle" className="fill-muted-foreground text-[11px]">
-          interações
-        </text>
-      </g>
-    </svg>
-  );
-}
+function CalculadoraApp() {
+  const [config, setConfig] = useState<ReportConfig>(DEFAULT_REPORT_CONFIG);
+  const [ticketC, setTicketC] = useState<number>(2200);
+  const [investC, setInvestC] = useState<number>(10000);
 
-function Calculadora() {
-  const [ticketC, setTicketC] = useState(2200);
-  const [investC, setInvestC] = useState(10000);
+  // Estados de Administração
+  const [adminToken, setAdminToken] = useState<string | null>(null);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+
+  // 1. Carrega dados persistidos do servidor / localStorage no carregamento
+  useEffect(() => {
+    // Tenta obter token salvo na sessão
+    const savedToken = sessionStorage.getItem("localway_admin_token");
+    if (savedToken) {
+      setAdminToken(savedToken);
+      // Valida token com o backend
+      fetch("/api/auth/verify", {
+        headers: { Authorization: `Bearer ${savedToken}` },
+      })
+        .then((r) => r.json())
+        .then((res) => {
+          if (!res.valid) {
+            sessionStorage.removeItem("localway_admin_token");
+            setAdminToken(null);
+          }
+        })
+        .catch((err) => {
+          console.debug("Auth verify failed", err);
+        });
+    }
+
+    // Busca dados do relatório do servidor
+    fetch("/api/report-data")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.success && res.data) {
+          setConfig(res.data);
+          setTicketC(res.data.financial.ticketCents ?? 2200);
+          setInvestC(res.data.financial.investCents ?? 10000);
+          try {
+            localStorage.setItem("localway_report_config", JSON.stringify(res.data));
+          } catch (err) {
+            console.debug("Local cache write failed", err);
+          }
+        }
+      })
+      .catch(() => {
+        // Fallback para cache local se servidor não responder
+        try {
+          const cached = localStorage.getItem("localway_report_config");
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            setConfig(parsed);
+            setTicketC(parsed.financial.ticketCents ?? 2200);
+            setInvestC(parsed.financial.investCents ?? 10000);
+          }
+        } catch (err) {
+          console.debug("Local cache read failed", err);
+        }
+      });
+  }, []);
+
+  // Lógica de cálculo reativa
   const ticket = ticketC / 100;
   const invest = investC / 100;
+  const routes = config.profile.routes;
+  const margin = (config.financial.marginPercent || 100) / 100;
+  const conversionRate = (config.financial.conversionRatePercent || 10) / 100;
 
-  // Cálculo de receita e ROI direto
-  const receita = ROUTES * ticket;
+  // Receita potencial atribuída às rotas
+  const receita = routes * ticket;
   const retornoLiquido = receita - invest;
   const roiPercent = invest > 0 ? ((receita - invest) / invest) * 100 : 0;
-  const comprasEquilibrio = ticket > 0 ? Math.ceil(invest / ticket) : 0;
-  const receitaEquilibrio = comprasEquilibrio * ticket;
+
+  // Ponto de equilíbrio corrigido tecnicamente
+  const lucroPorVenda = ticket * margin;
+  const vendasNecessarias = lucroPorVenda > 0 ? Math.ceil(invest / lucroPorVenda) : 0;
+  const receitaBreakEven = vendasNecessarias * ticket;
+  const rotasNecessarias = conversionRate > 0 ? Math.ceil(vendasNecessarias / conversionRate) : 0;
+
+  // Totais do histórico financeiro
+  const totalImplementacao = useMemo(
+    () => config.history.implementations.reduce((acc, it) => acc + (it.amount || 0), 0),
+    [config.history.implementations],
+  );
+  const totalRecorrencia = useMemo(
+    () => config.history.recurrences.reduce((acc, it) => acc + (it.amount || 0), 0),
+    [config.history.recurrences],
+  );
+  const totalPagoGeral = totalImplementacao + totalRecorrencia;
+
+  // Trata clique no botão administrativo
+  const handleAdminClick = () => {
+    if (adminToken) {
+      setAdminPanelOpen(true);
+    } else {
+      setAuthModalOpen(true);
+    }
+  };
+
+  const handleAuthenticated = (token: string) => {
+    setAdminToken(token);
+    setAdminPanelOpen(true);
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem("localway_admin_token");
+    setAdminToken(null);
+    setAdminPanelOpen(false);
+  };
+
+  // Salvar alterações vindas do Painel Administrativo
+  const handleSaveConfig = async (newConfig: ReportConfig): Promise<boolean> => {
+    try {
+      const res = await fetch("/api/report-data", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({ data: newConfig }),
+      });
+
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setConfig(newConfig);
+        setTicketC(newConfig.financial.ticketCents);
+        setInvestC(newConfig.financial.investCents);
+        try {
+          localStorage.setItem("localway_report_config", JSON.stringify(newConfig));
+        } catch (err) {
+          console.debug("Local cache write failed", err);
+        }
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error("Erro ao salvar dados:", err);
+      return false;
+    }
+  };
+
+  const handleResetConfig = async (): Promise<boolean> => {
+    try {
+      const res = await fetch("/api/report-data/reset", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${adminToken}`,
+        },
+      });
+
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setConfig(DEFAULT_REPORT_CONFIG);
+        setTicketC(DEFAULT_REPORT_CONFIG.financial.ticketCents);
+        setInvestC(DEFAULT_REPORT_CONFIG.financial.investCents);
+        try {
+          localStorage.setItem("localway_report_config", JSON.stringify(DEFAULT_REPORT_CONFIG));
+        } catch (err) {
+          console.debug("Local cache write failed", err);
+        }
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error("Erro ao resetar dados:", err);
+      return false;
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background">
+      {/* Cabeçalho */}
       <header className="border-b border-border bg-card">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-5 sm:px-8">
           <img
@@ -157,41 +300,80 @@ function Calculadora() {
               (e.currentTarget as HTMLImageElement).src = "/logo@localway_2KPNG.png";
             }}
           />
-          <button
-            onClick={() => window.print()}
-            className="no-print rounded-lg border border-border px-4 py-2 text-sm font-semibold text-navy transition hover:bg-secondary cursor-pointer"
-          >
-            Imprimir / salvar PDF
-          </button>
+
+          <div className="flex items-center gap-3">
+            {/* Botão Salvar PDF / Imprimir */}
+            <button
+              onClick={() => window.print()}
+              className="no-print rounded-lg border border-border px-4 py-2 text-sm font-semibold text-navy transition hover:bg-secondary cursor-pointer"
+            >
+              Imprimir / salvar PDF
+            </button>
+          </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-6xl space-y-6 px-5 py-8 sm:px-8 sm:py-12">
+        {/* Identificação do Cliente e Título */}
         <div>
-          <p className="text-sm font-bold uppercase tracking-wider text-sky">Calculadora de ROI</p>
-          <h1 className="mt-2 text-3xl font-bold text-navy sm:text-5xl">Espetinho no Trailer</h1>
-          <p className="mt-3 text-lg text-muted-foreground">
-            Perfil no Google · indicadores de maio a outubro de 2026
-          </p>
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-sm font-bold uppercase tracking-wider text-sky">
+              {config.general.reportTag}
+            </p>
+
+            {/* Botão de Acesso Administrativo com Ícone de Usuário */}
+            <button
+              type="button"
+              onClick={handleAdminClick}
+              className="no-print inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-semibold text-muted-foreground hover:bg-secondary hover:text-navy transition shadow-xs cursor-pointer"
+              title="Acesso Administrativo (Localway)"
+              aria-label="Acesso Administrativo"
+            >
+              {adminToken ? (
+                <>
+                  <ShieldCheck className="h-3.5 w-3.5 text-positive" />
+                  <span className="font-bold text-navy">Painel Admin</span>
+                </>
+              ) : (
+                <>
+                  <User className="h-3.5 w-3.5 text-sky" />
+                  <span>Acesso Admin</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          <h1 className="mt-2 text-3xl font-bold text-navy sm:text-5xl">
+            {config.general.clientName}
+          </h1>
+          <p className="mt-3 text-lg text-muted-foreground">{config.general.reportPeriod}</p>
         </div>
 
-        {/* Parâmetros Editáveis */}
+        {/* Parâmetros Editáveis da Simulação */}
         <section className="no-print-border rounded-2xl border border-sky/30 bg-sky-soft p-6 sm:p-8">
-          <h2 className="mb-5 text-lg font-semibold text-navy">Parâmetros do cálculo</h2>
+          <div className="mb-5 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-navy">Parâmetros do cálculo</h2>
+            <span className="text-xs font-medium text-sky-700 bg-sky-soft/80 border border-sky/20 rounded-md px-2 py-0.5">
+              Simulação interativa
+            </span>
+          </div>
+
           <div className="grid gap-6 sm:grid-cols-2">
             <MoneyInput
               id="ticket"
               label="Ticket médio estimado por compra"
-              hint="Dois espetinhos de R$ 9,00 + refrigerante de R$ 4,00 (estimativa padrão)."
+              hint={config.financial.ticketHint}
               cents={ticketC}
               onChange={setTicketC}
+              tooltip={config.explanations.ticket}
             />
             <MoneyInput
               id="invest"
               label="Valor pago pelo cliente no mês"
-              hint="Recorrência efetivamente paga no mês analisado."
+              hint={config.financial.investHint}
               cents={investC}
               onChange={setInvestC}
+              tooltip={config.explanations.invest}
             />
           </div>
         </section>
@@ -200,68 +382,115 @@ function Calculadora() {
         <Section title="Indicadores do perfil" tag="Dados registrados">
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
             {[
-              [VIEWS, "Visualizações do perfil"],
-              [INTERACTIONS, "Interações registradas"],
-              [ROUTES, "Solicitações de rota"],
-              [CALLS, "Ligações"],
-            ].map(([v, l]) => (
-              <div key={l} className="rounded-xl border border-border border-l-4 border-l-sky p-5">
-                <div className="font-display text-3xl font-bold text-navy sm:text-4xl">{v}</div>
+              {
+                v: config.profile.views,
+                l: "Visualizações do perfil",
+                tip: config.explanations.views,
+              },
+              {
+                v: config.profile.interactions,
+                l: "Interações registradas",
+                tip: config.explanations.interactions,
+              },
+              {
+                v: config.profile.routes,
+                l: "Solicitações de rota",
+                tip: config.explanations.routes,
+              },
+              {
+                v: config.profile.calls,
+                l: "Ligações",
+                tip: config.explanations.calls,
+              },
+            ].map(({ v, l, tip }) => (
+              <div
+                key={l}
+                className="rounded-xl border border-border border-l-4 border-l-sky p-5 bg-card"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="font-display text-3xl font-bold text-navy sm:text-4xl">{v}</div>
+                  <InfoTooltip explanation={tip} />
+                </div>
                 <div className="mt-1 text-sm font-medium text-muted-foreground">{l}</div>
               </div>
             ))}
           </div>
-          <div className="mt-8 grid items-center gap-8 md:grid-cols-[auto_1fr]">
-            <Donut />
-            <div className="space-y-5">
-              {[
-                ["bg-navy", "Solicitações de rota", ROUTES],
-                ["bg-sky", "Ligações", CALLS],
-              ].map(([c, l, v]) => (
-                <div key={l as string} className="flex items-start gap-3">
-                  <span className={`mt-1.5 h-3.5 w-3.5 rounded ${c}`} />
-                  <div>
-                    <div className="font-semibold text-foreground">{l}</div>
-                    <div className="text-muted-foreground">
-                      {v} · {pct((v as number) / INTERACTIONS)} das interações
+
+          {/* Renderização dos Gráficos Gerenciáveis */}
+          <div className="mt-8 space-y-6">
+            {config.charts
+              .filter((c) => c.visible)
+              .sort((a, b) => a.order - b.order)
+              .map((chart) => (
+                <div key={chart.id} className="rounded-xl border border-border bg-secondary/30 p-5">
+                  <div className="mb-4 flex items-center justify-between gap-2 border-b border-border pb-2.5">
+                    <div>
+                      <h3 className="font-display text-base font-bold text-navy">{chart.title}</h3>
+                      {chart.description && (
+                        <p className="text-xs text-muted-foreground">{chart.description}</p>
+                      )}
                     </div>
                   </div>
+                  <DynamicChart chart={chart} />
                 </div>
               ))}
-              <div className="rounded-xl bg-secondary p-4">
-                <div className="font-display text-2xl font-bold text-navy">
-                  {pct(INTERACTIONS / VIEWS)}
+
+            {/* Métrica complementar de interação */}
+            <div className="rounded-xl bg-secondary p-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-foreground">
+                  Taxa de interação do perfil
                 </div>
-                <div className="text-sm text-muted-foreground">
-                  Taxa de interação do perfil (interações ÷ visualizações: {INTERACTIONS} ÷ {VIEWS}
-                  ).
+                <div className="text-xs text-muted-foreground">
+                  Calculada pela proporção de ações realizadas sobre as visualizações (
+                  {config.profile.interactions} ÷ {config.profile.views})
                 </div>
+              </div>
+              <div className="font-display text-2xl font-bold text-navy">
+                {config.profile.views > 0
+                  ? pct(config.profile.interactions / config.profile.views)
+                  : "0%"}
               </div>
             </div>
           </div>
         </Section>
 
         {/* Retorno sobre o Investimento (ROI) */}
-        <Section title="Retorno sobre o Investimento (ROI)" tag="Desempenho">
+        <Section
+          title="Retorno sobre o Investimento (ROI)"
+          tag="Desempenho"
+          tooltip={config.explanations.roi}
+        >
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="rounded-xl border border-border bg-card p-5">
-              <div className="text-sm font-medium text-muted-foreground">
-                Receita atribuída (rotas)
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Receita atribuída (rotas)
+                </span>
+                <InfoTooltip explanation={config.explanations.revenue} />
               </div>
               <div className="mt-2 font-display text-3xl font-bold text-navy">{brl(receita)}</div>
               <div className="mt-1 text-xs text-muted-foreground">
-                {ROUTES} solicitações de rota × {brl(ticket)}
+                {routes} solicitações de rota × {brl(ticket)}
               </div>
             </div>
 
             <div className="rounded-xl border border-border bg-card p-5">
-              <div className="text-sm font-medium text-muted-foreground">Investimento mensal</div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Investimento mensal
+                </span>
+                <InfoTooltip explanation={config.explanations.invest} />
+              </div>
               <div className="mt-2 font-display text-3xl font-bold text-navy">{brl(invest)}</div>
               <div className="mt-1 text-xs text-muted-foreground">Recorrência mensal informada</div>
             </div>
 
             <div className="rounded-xl border border-positive/30 bg-positive-soft p-5">
-              <div className="text-sm font-semibold text-positive">ROI Estimado</div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-positive">ROI Estimado</span>
+                <InfoTooltip explanation={config.explanations.roi} />
+              </div>
               <div className="mt-2 font-display text-3xl font-bold text-positive">
                 {invest > 0 ? `+${num(roiPercent, 1)}%` : "—"}
               </div>
@@ -271,8 +500,10 @@ function Calculadora() {
             </div>
           </div>
 
-          <div className="mt-6 rounded-xl border border-border bg-secondary/50 p-5">
-            <div className="grid gap-4 md:grid-cols-2 md:items-center">
+          {/* Fórmula e Ponto de Equilíbrio Didático */}
+          <div className="mt-6 rounded-xl border border-border bg-secondary/50 p-5 space-y-4">
+            <div className="grid gap-6 md:grid-cols-2 md:items-start">
+              {/* Fórmula Aplicada */}
               <div>
                 <span className="text-xs font-bold uppercase tracking-wider text-sky">
                   Fórmula aplicada
@@ -283,110 +514,154 @@ function Calculadora() {
                 <p className="mt-1 text-xs text-muted-foreground font-mono">
                   [({brl(receita)} − {brl(invest)}) ÷ {brl(invest)}] × 100 = {num(roiPercent, 1)}%
                 </p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Compara a receita potencial diretamente associada ao trabalho no Google com a
+                  mensalidade contratada.
+                </p>
               </div>
 
-              <div className="rounded-lg bg-card p-4 border border-border md:text-right">
-                <div className="text-xs font-medium text-muted-foreground">
-                  Ponto de equilíbrio (Break-even)
+              {/* Ponto de Equilíbrio Reformulado & Explicado */}
+              <div className="rounded-xl bg-card p-4 border border-border shadow-xs">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold uppercase tracking-wider text-navy flex items-center gap-1.5">
+                    <span>Ponto de Equilíbrio</span>
+                    <span className="text-sky font-normal text-[11px]">(Break-even)</span>
+                  </div>
+                  <InfoTooltip explanation={config.explanations.breakeven} />
                 </div>
-                <div className="mt-0.5 font-display text-xl font-bold text-navy">
-                  {comprasEquilibrio} compras ({brl(receitaEquilibrio)})
+
+                <div className="mt-2 font-display text-xl font-bold text-navy">
+                  {vendasNecessarias} vendas ({brl(receitaBreakEven)})
                 </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  Basta {pct(ROUTES > 0 ? comprasEquilibrio / ROUTES : 0)} das solicitações de rota
-                  para cobrir a mensalidade
+
+                <div className="mt-2 space-y-1.5 text-xs text-muted-foreground">
+                  <p>
+                    • <strong>Vendas necessárias:</strong> {vendasNecessarias} pedidos a{" "}
+                    {brl(ticket)} para cobrir o investimento mensal de {brl(invest)}.
+                  </p>
+                  <p>
+                    • <strong>Rotas estimadas necessárias:</strong> aproximadamente{" "}
+                    <strong>{rotasNecessarias}</strong> das {routes} solicitações registradas,
+                    considerando a taxa de conversão estimada de{" "}
+                    {config.financial.conversionRatePercent}%.
+                  </p>
                 </div>
               </div>
             </div>
           </div>
         </Section>
 
-        {/* Histórico Financeiro Fixo */}
+        {/* Histórico Financeiro Fixo / Gerenciado */}
         <Section title="Histórico financeiro" tag="Valores informados">
           <div className="grid gap-6 md:grid-cols-2">
             <div>
-              <h3 className="font-semibold text-foreground">Implementação · julho de 2026</h3>
+              <h3 className="font-semibold text-foreground">Implementação e Ativos Digitais</h3>
               <dl className="mt-3 divide-y divide-border text-sm">
-                <Row k="Implementação e configuração" v={1350} />
-                <Row k="Implementação e configuração" v={570} />
-                <Row k="Total de implementação" v={1920} strong />
+                {config.history.implementations.map((item) => (
+                  <div key={item.id} className="flex justify-between gap-4 py-2 text-foreground">
+                    <dt>
+                      {item.description}
+                      {item.dateOrPeriod && (
+                        <span className="block text-xs text-muted-foreground">
+                          {item.dateOrPeriod}
+                        </span>
+                      )}
+                    </dt>
+                    <dd className="shrink-0 font-medium">{brl(item.amount)}</dd>
+                  </div>
+                ))}
+                <div className="flex justify-between gap-4 py-2.5 font-bold text-navy">
+                  <dt>Total de implementação</dt>
+                  <dd className="shrink-0">{brl(totalImplementacao)}</dd>
+                </div>
               </dl>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Não entra no cálculo mensal da recorrência.
+              <p className="mt-2 text-xs text-muted-foreground">
+                Custos de ativação inicial (não compõem o cálculo da recorrência mensal).
               </p>
             </div>
+
             <div>
-              <h3 className="font-semibold text-foreground">Recorrência</h3>
+              <h3 className="font-semibold text-foreground">Recorrência Mensal</h3>
               <dl className="mt-3 divide-y divide-border text-sm">
-                <Row k="Julho de 2026 (início em 17/07/2026)" v={100} />
-                <Row k="Agosto de 2026" v={100} />
-                <Row k="Setembro de 2026" v={250} />
-                <Row k="Total de recorrência" v={450} strong />
+                {config.history.recurrences.map((item) => (
+                  <div key={item.id} className="flex justify-between gap-4 py-2 text-foreground">
+                    <dt>
+                      {item.dateOrPeriod}
+                      {item.note && (
+                        <span className="block text-xs text-muted-foreground">{item.note}</span>
+                      )}
+                    </dt>
+                    <dd className="shrink-0 font-medium">{brl(item.amount)}</dd>
+                  </div>
+                ))}
+                <div className="flex justify-between gap-4 py-2.5 font-bold text-navy">
+                  <dt>Total de recorrência</dt>
+                  <dd className="shrink-0">{brl(totalRecorrencia)}</dd>
+                </div>
               </dl>
             </div>
           </div>
+
           <div className="mt-6 flex flex-wrap items-baseline justify-between gap-2 rounded-xl bg-secondary p-5">
             <span className="font-semibold text-foreground">
               Total pago informado, incluindo implementação
             </span>
-            <span className="font-display text-2xl font-bold text-navy">{brl(2370)}</span>
+            <span className="font-display text-2xl font-bold text-navy">{brl(totalPagoGeral)}</span>
           </div>
         </Section>
 
-        {/* Diagnóstico */}
+        {/* Diagnóstico & Recomendações */}
         <div className="grid gap-6 md:grid-cols-2">
           <section className="print-break rounded-2xl border border-border bg-card p-6 sm:p-8">
-            <h2 className="mb-4 text-xl font-semibold text-positive">Pontos positivos</h2>
-            <List
-              color="bg-positive"
-              items={[
-                "Perfil visualmente atrativo",
-                `${REVIEWS} avaliações com nota máxima de 5 estrelas`,
-                `${ROUTES} solicitações de rota`,
-                `${CALLS} ligações registradas`,
-              ]}
-            />
+            <h2 className="mb-4 text-xl font-semibold text-positive flex items-center justify-between">
+              <span>Pontos positivos</span>
+              <InfoTooltip explanation={config.explanations.reviews} />
+            </h2>
+            <ul className="space-y-3">
+              {config.diagnostics.positivePoints.map((item, i) => (
+                <li key={i} className="flex gap-3 text-foreground text-sm">
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-positive" />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
           </section>
+
           <section className="print-break rounded-2xl border border-border bg-card p-6 sm:p-8">
             <h2 className="mb-4 text-xl font-semibold text-navy">Oportunidades de melhoria</h2>
-            <List
-              color="bg-sky"
-              items={[
-                "Conseguir mais avaliações autênticas",
-                "Atualizar o cardápio",
-                "Produzir fotos próprias dos espetinhos e acompanhamentos",
-                "Registrar como os clientes conheceram o estabelecimento",
-                "Confirmar se o mini site já está publicado",
-              ]}
-            />
-            <p className="mt-4 text-sm text-muted-foreground">Instagram: canal opcional.</p>
+            <ul className="space-y-3">
+              {config.diagnostics.improvementPoints.map((item, i) => (
+                <li key={i} className="flex gap-3 text-foreground text-sm">
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-sky" />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+            {config.diagnostics.notes && (
+              <p className="mt-4 text-sm text-muted-foreground border-t border-border pt-3">
+                {config.diagnostics.notes}
+              </p>
+            )}
           </section>
         </div>
       </main>
-    </div>
-  );
-}
 
-function Row({ k, v, strong }: { k: string; v: number; strong?: boolean }) {
-  return (
-    <div
-      className={`flex justify-between gap-4 py-2.5 ${strong ? "font-bold text-navy" : "text-foreground"}`}
-    >
-      <dt>{k}</dt>
-      <dd className="shrink-0">{brl(v)}</dd>
-    </div>
-  );
-}
+      {/* Modal de Autenticação para Administrador */}
+      <AdminAuthModal
+        open={authModalOpen}
+        onOpenChange={setAuthModalOpen}
+        onSuccess={handleAuthenticated}
+      />
 
-function List({ items, color }: { items: string[]; color: string }) {
-  return (
-    <ul className="space-y-3">
-      {items.map((i) => (
-        <li key={i} className="flex gap-3 text-foreground">
-          <span className={`mt-2 h-2 w-2 shrink-0 rounded-full ${color}`} />
-          {i}
-        </li>
-      ))}
-    </ul>
+      {/* Painel Administrativo Completo */}
+      <AdminPanel
+        config={config}
+        isOpen={adminPanelOpen}
+        onClose={() => setAdminPanelOpen(false)}
+        onSave={handleSaveConfig}
+        onReset={handleResetConfig}
+        onLogout={handleLogout}
+      />
+    </div>
   );
 }
